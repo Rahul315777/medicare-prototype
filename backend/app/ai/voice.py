@@ -58,8 +58,8 @@ class VoiceAIService:
     async def process_voice_conversation(
         self,
         audio_bytes: bytes,
-        chat_history: list[tuple[str, str]] | None = None,
         language: str = "en",
+        user_id: str = None
     ) -> dict[str, Any]:
         """Full voice pipeline with App Navigation & Booking Control."""
         
@@ -106,12 +106,25 @@ JSON Format:
         confidence = 1.0
         sources = []
 
-        # 3. Action Execution: Agar chat hai toh medical database (RAG) se answer nikalo
+        # 3. Action Execution: Connect to Unified Memory (RAG + OCR context)
         if action == "chat":
-            rag_result = await rag_service.query(transcript, chat_history, language)
-            reply_text = rag_result["answer"]
-            confidence = rag_result["confidence"]
-            sources = rag_result["sources"]
+            rag_result = await rag_service.query(
+                transcript, 
+                session_id="voice", 
+                user_id=user_id
+            )
+            reply_text = rag_result.get("answer", reply_text)
+            confidence = rag_result.get("confidence", 1.0)
+            sources = rag_result.get("sources", [])
+
+            # Write the voice turn back into FAISS memory
+            if user_id:
+                await rag_service.remember_chat_turn(
+                    session_id="voice",
+                    user_id=user_id,
+                    user_text=transcript,
+                    ai_text=reply_text
+                )
 
         # 4. Zubaan (Speaking): Generate Audio for the final response
         audio_response = await self.text_to_speech(reply_text, language)

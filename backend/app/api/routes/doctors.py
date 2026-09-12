@@ -11,10 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.ai.memory import memory_service
+from app.ai.services import generate_clinical_summary
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models import Appointment, AppointmentStatus, Doctor, User
 from app.schemas import AppointmentCreate, AppointmentResponse, DoctorResponse
+from app.services.patient_context import get_patient_context
 
 logger = logging.getLogger(__name__)
 
@@ -145,3 +147,44 @@ async def cancel_appointment(
         raise HTTPException(status_code=404, detail="Appointment not found")
     appointment.status = AppointmentStatus.CANCELLED
     return {"message": "Appointment cancelled"}
+
+
+# ==========================================
+# PHASE 4: CLINICAL SUMMARY ENDPOINT
+# ==========================================
+@router.post("/appointments/{appointment_id}/summary", response_model=AppointmentResponse)
+async def generate_appointment_summary(
+    appointment_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Aggregate this patient's profile + chat + OCR reports + prescriptions
+    (via app.services.patient_context) and generate a structured Clinical
+    Summary, saved onto Appointment.call_summary for the doctor to view."""
+    
+    # 1. Fetch the appointment
+    result = await db.execute(
+        select(Appointment)
+        .options(selectinload(Appointment.doctor))
+        .where(Appointment.id == appointment_id, Appointment.patient_id == user.id)
+    )
+    appointment = result.scalar_one_or_none()
+    
+    if not appointment:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    # 2. Get Patient's Full History Context
+    try:
+        context = await get_patient_context(db, user.id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Patient context not found")
+
+    # 3. Call AI Service to generate Summary
+    summary = await generate_clinical_summary(context.to_prompt_text())
+
+    # 4. Save to Database
+    appointment.call_summary = summary
+    await db.flush()
+    await db.refresh(appointment)
+
+    return appointment

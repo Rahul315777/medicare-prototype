@@ -155,6 +155,9 @@ export const chatApi = {
   },
 };
 
+// ==========================================
+// Doctors (Patient-facing)
+// ==========================================
 export const doctorsApi = {
   list: (params?: Record<string, unknown>) => api.get("/doctors", { params }),
   get: (id: string) => api.get(`/doctors/${id}`),
@@ -162,6 +165,16 @@ export const doctorsApi = {
     api.post("/appointments", data),
   appointments: () => api.get("/appointments"),
   cancel: (id: string) => api.patch(`/appointments/${id}/cancel`),
+  generateSummary: (appointmentId: string) => api.post(`/appointments/${appointmentId}/summary`),
+};
+
+// ==========================================
+// Doctor-facing portal (Phase 5)
+// ==========================================
+export const doctorApi = {
+  myAppointments: (params?: Record<string, unknown>) => api.get("/doctor/appointments", { params }),
+  getPatientSummary: (appointmentId: string) =>
+    api.get(`/doctor/appointments/${appointmentId}/patient-summary`),
 };
 
 // ==========================================

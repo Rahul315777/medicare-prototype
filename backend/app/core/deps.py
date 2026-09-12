@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import decode_token
-from app.models import AuditLog, User, UserRole
+from app.models import AuditLog, Doctor, User, UserRole
 
 # ==========================================================
 # Security Scheme
@@ -99,6 +99,34 @@ async def get_admin_user(
         )
 
     return current_user
+
+
+# ==========================================================
+# Doctor Dependency (Phase 5)
+# ==========================================================
+
+async def get_current_doctor(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Doctor:
+    """Allow only users with role=DOCTOR who are linked to a Doctor record."""
+
+    if current_user.role != UserRole.DOCTOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Doctor access required",
+        )
+
+    result = await db.execute(select(Doctor).where(Doctor.user_id == current_user.id))
+    doctor = result.scalar_one_or_none()
+
+    if doctor is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No doctor profile linked to this account",
+        )
+
+    return doctor
 
 
 # ==========================================================

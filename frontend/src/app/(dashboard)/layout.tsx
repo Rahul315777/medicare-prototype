@@ -4,10 +4,10 @@ import { useAuthStore } from "@/store/auth";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import Link from "next/link";
-import { LayoutDashboard, MessageSquare, FileText, Calendar, LogOut } from "lucide-react";
+import { LayoutDashboard, MessageSquare, FileText, Calendar, LogOut, Stethoscope } from "lucide-react";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { token, logout } = useAuthStore();
+  const { token, user, logout } = useAuthStore();
   const router = useRouter();
 
   useEffect(() => {
@@ -18,7 +18,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen bg-slate-50 dark:bg-slate-950">
-      {/* Sidebar Navigation */}
       <aside className="w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hidden md:flex flex-col p-6">
         <div className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 mb-8">
           MediCare<span className="text-blue-600">AI</span>
@@ -33,9 +32,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Link href="/reports" className="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 font-medium text-sm transition">
             <FileText size={18} /> Reports
           </Link>
-          <Link href="/appointments" className="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 font-medium text-sm transition">
+          <Link href="/doctors" className="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 font-medium text-sm transition">
             <Calendar size={18} /> Appointments
           </Link>
+          {user?.role === "doctor" && (
+            <Link href="/doctor/appointments" className="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 font-medium text-sm transition">
+              <Stethoscope size={18} /> Doctor Portal
+            </Link>
+          )}
         </nav>
         <button 
           onClick={() => { logout(); router.push("/login"); }}
@@ -45,7 +49,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </button>
       </aside>
 
-      {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto p-6 lg:p-10">
         {children}
       </main>

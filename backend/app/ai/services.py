@@ -22,6 +22,7 @@ if groq_client is None:
 
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
+
 async def fetch_real_doctors(specialty: str, location: str = "India") -> list:
     """Google Places API se real doctors fetch karta hai, fail hone par mock data deta hai"""
     
@@ -266,3 +267,80 @@ def _mock_prescription() -> dict[str, Any]:
 
 def _mock_call_analysis() -> dict[str, Any]:
     return {"summary": "Patient presented with mild fever.", "symptoms": ["Fever"], "medicines": [], "follow_up": "Return if fever persists", "suggested_tests": [], "doctor_instructions": ["Rest"]}
+
+
+# ==========================================================
+# CLINICAL SUMMARY (Phase 4)
+# ==========================================================
+
+CLINICAL_SUMMARY_SYSTEM_PROMPT = """You are MediCare AI, generating a structured clinical summary for a doctor
+from a patient's chat history, uploaded report findings, and prescriptions.
+
+You MUST output ONLY a valid JSON object with EXACTLY these keys:
+{
+  "chief_complaints": "string",
+  "symptoms": ["string"],
+  "medical_history": "string",
+  "medications": ["string"],
+  "allergies": "string",
+  "reports": "string",
+  "important_findings": "string"
+}
+
+CRITICAL RULES:
+1. Use ONLY the information given in the PATIENT CONTEXT below. NEVER invent, assume, or guess a
+   symptom, diagnosis, medication, or result that isn't explicitly present.
+2. If a section has no information in the provided context, its value MUST be the literal string
+   "Not provided" (or an empty list [] for the "symptoms"/"medications" fields).
+3. Do NOT provide a diagnosis or suggest a treatment plan — only summarize what is documented.
+4. Do NOT include markdown, code fences, or any text outside the JSON object.
+"""
+
+_SUMMARY_FALLBACK: dict[str, Any] = {
+    "chief_complaints": "Not provided",
+    "symptoms": [],
+    "medical_history": "Not provided",
+    "medications": [],
+    "allergies": "Not provided",
+    "reports": "Not provided",
+    "important_findings": "Not provided",
+}
+
+
+async def generate_clinical_summary(context_text: str) -> dict[str, Any]:
+    """Turn a PatientContext.to_prompt_text() block (see app/services/patient_context.py)
+    into a structured clinical summary via Groq. Pure summarization of existing
+    data — never invents a symptom, diagnosis, or result that wasn't provided."""
+    if groq_client is None:
+        logger.warning("GROQ_API_KEY missing — returning empty clinical summary.")
+        return dict(_SUMMARY_FALLBACK)
+
+    try:
+        response = groq_client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {"role": "system", "content": CLINICAL_SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": f"PATIENT CONTEXT:\n\n{context_text}"},
+            ],
+            temperature=0.1,
+            max_tokens=800,
+        )
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```json"):
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif raw.startswith("```"):
+            raw = raw.split("```")[1].split("```")[0].strip()
+        data = json.loads(raw)
+    except Exception as exc:
+        logger.error(f"Clinical summary generation failed: {exc}")
+        return dict(_SUMMARY_FALLBACK)
+
+    return {
+        "chief_complaints": data.get("chief_complaints", "Not provided"),
+        "symptoms": data.get("symptoms", []),
+        "medical_history": data.get("medical_history", "Not provided"),
+        "medications": data.get("medications", []),
+        "allergies": data.get("allergies", "Not provided"),
+        "reports": data.get("reports", "Not provided"),
+        "important_findings": data.get("important_findings", "Not provided"),
+    }
