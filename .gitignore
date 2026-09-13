@@ -1,2 +1,14 @@
+﻿.venv/
+*env/
 backend/myenv/
 backend/newenv/
+.env
+.env.local
+backend/.env
+!*.env.example
+*.db
+backend/uploads/
+*.faiss
+*.pkl
+__pycache__/
+*.pyc
