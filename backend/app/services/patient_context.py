@@ -32,10 +32,12 @@ from sqlalchemy.orm import selectinload
 
 from app.models import (
     ChatSession,
+    ClinicalSession,
     FamilyProfile,
     FamilyRelation,
     MedicalReport,
     Prescription,
+    RedFlagAlert,
     User,
 )
 
@@ -99,11 +101,35 @@ class PrescriptionSummary(BaseModel):
     created_at: datetime
 
 
+class RedFlagSummary(BaseModel):
+    alert_id: uuid.UUID
+    severity: str
+    detected_symptoms: list[str] = []
+    reason: str
+    recommended_action: str
+    source: str = NOT_PROVIDED
+    acknowledged: bool
+    acknowledged_at: datetime | None = None
+    created_at: datetime
+
+
+class ClinicalSessionSummary(BaseModel):
+    session_id: uuid.UUID
+    status: str
+    chief_complaint: str = NOT_PROVIDED
+    collected_fields: dict[str, Any] = {}
+    red_flags: list[RedFlagSummary] = []
+    created_at: datetime
+
+
 class PatientContext(BaseModel):
     patient: PatientInfo
     recent_chats: list[ChatSessionSummary]
     reports: list[OCRDocument]
     prescriptions: list[PrescriptionSummary]
+    # Phase 1/2: structured AI pre-consultation interviews and any
+    # triage/red-flag signals raised during them.
+    clinical_sessions: list[ClinicalSessionSummary] = []
     has_any_data: bool  # False ⇒ brand-new patient, nothing recorded yet
 
     def to_prompt_text(self) -> str:
@@ -150,6 +176,19 @@ class PatientContext(BaseModel):
         else:
             lines.append(f"- {NOT_PROVIDED}")
 
+        lines.append("\nAI PRE-CONSULTATION CLINICAL INTERVIEW:")
+        if self.clinical_sessions:
+            for cs in self.clinical_sessions:
+                lines.append(f"- Chief complaint: {cs.chief_complaint} (status: {cs.status})")
+                for field, value in cs.collected_fields.items():
+                    lines.append(f"  - {field}: {value}")
+                for rf in cs.red_flags:
+                    lines.append(
+                        f"  - RED FLAG ({rf.severity}): {', '.join(rf.detected_symptoms) or NOT_PROVIDED} — {rf.reason}"
+                    )
+        else:
+            lines.append(f"- {NOT_PROVIDED}")
+
         return "\n".join(lines)
 
 
@@ -175,14 +214,16 @@ async def get_patient_context(db: AsyncSession, user_id: uuid.UUID | str) -> Pat
     recent_chats = await _build_chat_history(db, user_id)
     reports = await _build_reports(db, user_id)
     prescriptions = await _build_prescriptions(db, user_id)
+    clinical_sessions = await _build_clinical_sessions(db, user_id)
 
-    has_any_data = bool(recent_chats or reports or prescriptions)
+    has_any_data = bool(recent_chats or reports or prescriptions or clinical_sessions)
 
     return PatientContext(
         patient=patient_info,
         recent_chats=recent_chats,
         reports=reports,
         prescriptions=prescriptions,
+        clinical_sessions=clinical_sessions,
         has_any_data=has_any_data,
     )
 
@@ -294,4 +335,43 @@ async def _build_prescriptions(db: AsyncSession, user_id: uuid.UUID) -> list[Pre
             created_at=p.created_at,
         )
         for p in prescriptions
+    ]
+
+
+MAX_CLINICAL_SESSIONS = 3
+
+
+async def _build_clinical_sessions(db: AsyncSession, user_id: uuid.UUID) -> list[ClinicalSessionSummary]:
+    sessions_result = await db.execute(
+        select(ClinicalSession)
+        .options(selectinload(ClinicalSession.red_flags))
+        .where(ClinicalSession.user_id == user_id)
+        .order_by(ClinicalSession.created_at.desc())
+        .limit(MAX_CLINICAL_SESSIONS)
+    )
+    sessions = sessions_result.scalars().all()
+
+    return [
+        ClinicalSessionSummary(
+            session_id=s.id,
+            status=s.status.value if hasattr(s.status, "value") else str(s.status),
+            chief_complaint=s.chief_complaint or NOT_PROVIDED,
+            collected_fields=dict(s.collected_fields or {}),
+            red_flags=[
+                RedFlagSummary(
+                    alert_id=rf.id,
+                    severity=rf.severity.value if hasattr(rf.severity, "value") else str(rf.severity),
+                    detected_symptoms=list(rf.detected_symptoms or []),
+                    reason=rf.reason,
+                    recommended_action=rf.recommended_action,
+                    source=rf.source.value if hasattr(rf.source, "value") else str(rf.source),
+                    acknowledged=rf.acknowledged,
+                    acknowledged_at=rf.acknowledged_at,
+                    created_at=rf.created_at,
+                )
+                for rf in s.red_flags
+            ],
+            created_at=s.created_at,
+        )
+        for s in sessions
     ]

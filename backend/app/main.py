@@ -19,7 +19,9 @@ from app.api.routes import (
     admin,
     auth,
     chat,
+    clinical,
     dashboard,
+    doctor,
     doctors,
     emergency,
     medical,
@@ -109,7 +111,9 @@ app.include_router(auth.router, prefix=API_PREFIX)
 app.include_router(dashboard.router, prefix=API_PREFIX)
 app.include_router(chat.router, prefix=API_PREFIX)
 app.include_router(doctors.router, prefix=API_PREFIX)
+app.include_router(doctor.router, prefix=API_PREFIX)
 app.include_router(medical.router, prefix=API_PREFIX)
+app.include_router(clinical.router, prefix=API_PREFIX)
 app.include_router(emergency.router, prefix=API_PREFIX)
 app.include_router(admin.router, prefix=API_PREFIX)
 

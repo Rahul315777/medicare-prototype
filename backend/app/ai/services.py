@@ -7,6 +7,8 @@ import io
 import json
 import logging
 import os
+import platform
+import shutil
 from typing import Any
 from PIL import Image
 import httpx
@@ -66,6 +68,43 @@ async def fetch_real_doctors(specialty: str, location: str = "India") -> list:
         return get_mock_doctors(specialty)
 
 
+_tesseract_cmd_configured = False
+
+
+def _configure_tesseract_cmd(pytesseract_module) -> None:
+    """Point pytesseract at the tesseract binary in a cross-platform way.
+
+    Resolution order (checked once per process):
+    1. Explicit TESSERACT_CMD setting (any OS) — for machines where the
+       binary isn't on PATH.
+    2. Whatever `tesseract` resolves to on PATH — the normal case on
+       Linux/WSL/Docker, and on Windows installs that added Tesseract to PATH.
+    3. The default Windows install location, only as a last resort on
+       Windows, and only if it actually exists on disk.
+    If none of these resolve, pytesseract's own default ("tesseract") is left
+    in place; the FileNotFoundError it raises is already handled by the
+    caller.
+    """
+    global _tesseract_cmd_configured
+    if _tesseract_cmd_configured:
+        return
+
+    if settings.TESSERACT_CMD:
+        pytesseract_module.pytesseract.tesseract_cmd = settings.TESSERACT_CMD
+    else:
+        on_path = shutil.which("tesseract")
+        if on_path:
+            pytesseract_module.pytesseract.tesseract_cmd = on_path
+        elif platform.system() == "Windows":
+            default_windows_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+            if os.path.isfile(default_windows_path):
+                pytesseract_module.pytesseract.tesseract_cmd = default_windows_path
+        # Linux/WSL/Docker with tesseract missing from PATH: leave default;
+        # the existing FileNotFoundError handling in extract_ocr_text reports it.
+
+    _tesseract_cmd_configured = True
+
+
 def extract_ocr_text(file_content: bytes, filename: str) -> str:
     """Safely extracts text from PDFs or text documents."""
     try:
@@ -77,9 +116,8 @@ def extract_ocr_text(file_content: bytes, filename: str) -> str:
                 return text
         else:
             import pytesseract
-            
-            # Agar Windows par tesseract ka path set karna pade
-            pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+            _configure_tesseract_cmd(pytesseract)
 
             image = Image.open(io.BytesIO(file_content))
             return pytesseract.image_to_string(image)

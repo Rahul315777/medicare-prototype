@@ -175,6 +175,10 @@ export const doctorApi = {
   myAppointments: (params?: Record<string, unknown>) => api.get("/doctor/appointments", { params }),
   getPatientSummary: (appointmentId: string) =>
     api.get(`/doctor/appointments/${appointmentId}/patient-summary`),
+  acknowledgeRedFlag: (alertId: string, note?: string) =>
+    api.patch(`/doctor/red-flags/${alertId}/acknowledge`, { note: note ?? null }),
+  reviewSummary: (appointmentId: string, review: Record<string, unknown>) =>
+    api.patch(`/doctor/appointments/${appointmentId}/summary-review`, review),
 };
 
 // ==========================================

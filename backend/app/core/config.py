@@ -119,6 +119,12 @@ class Settings(BaseSettings):
     # STORAGE
     # ==================================================
 
+    # Optional explicit path to the tesseract binary. Leave unset to rely on
+    # PATH resolution (works on Linux/WSL/Docker and on Windows installs that
+    # added Tesseract to PATH). Only set this for a Windows dev machine where
+    # Tesseract wasn't added to PATH.
+    TESSERACT_CMD: str | None = None
+
     STORAGE_BACKEND: str = "local"
 
     UPLOAD_DIR: str = "./uploads"

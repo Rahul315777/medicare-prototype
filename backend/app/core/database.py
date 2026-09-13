@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 
@@ -28,14 +29,27 @@ engine_options = {
     "pool_pre_ping": True,
 }
 
-# Connection pooling is not supported by SQLite
 if not IS_SQLITE:
+    # Connection pooling (with a real, size-bounded pool) applies to
+    # Postgres/production.
     engine_options.update(
         {
             "pool_size": 10,
             "max_overflow": 20,
         }
     )
+else:
+    # SQLite doesn't benefit from a persistent connection pool the way
+    # Postgres does, and a pooled aiosqlite connection is bound to whichever
+    # asyncio event loop was running when it was opened. That's invisible in
+    # production (uvicorn only ever runs one event loop), but under
+    # pytest-asyncio — where each test function can get its own event loop —
+    # reusing a pooled connection from a previous test's (now-closed) loop
+    # raises "Event loop is closed". NullPool opens a fresh aiosqlite
+    # connection per checkout and closes it afterwards instead of pooling it,
+    # which sidesteps the issue entirely without touching production
+    # (Postgres) behavior at all.
+    engine_options["poolclass"] = NullPool
 
 engine = create_async_engine(
     settings.DATABASE_URL,

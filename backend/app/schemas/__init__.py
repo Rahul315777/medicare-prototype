@@ -6,7 +6,14 @@ from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field
 
-from app.models import AppointmentStatus, FamilyRelation, UserRole
+from app.models import (
+    AppointmentStatus,
+    ClinicalSessionStatus,
+    FamilyRelation,
+    RedFlagSeverity,
+    RedFlagSource,
+    UserRole,
+)
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -274,3 +281,152 @@ class DashboardResponse(BaseModel):
     recent_reports: list[ReportAnalysisResponse]
     daily_tip: str
     recommended_doctors: list[DoctorResponse]
+
+
+# ── Clinical Case-Taking (Phase 1/2) ──────────────────────────────────────────
+
+class ClinicalSessionCreate(BaseModel):
+    chief_complaint: str = Field(min_length=2)
+    language: str = "en"
+
+
+class ClinicalQuestionResponse(BaseModel):
+    id: uuid.UUID
+    field: str
+    prompt: str
+    question_type: str
+    options: list | None
+
+    model_config = {"from_attributes": True}
+
+
+class ClinicalAnswerCreate(BaseModel):
+    # question_id is optional so the very first answer (the chief complaint
+    # itself, asked implicitly at session creation) can also be recorded.
+    question_id: uuid.UUID | None = None
+    field: str = Field(min_length=1, max_length=50)
+    content: str = Field(min_length=1)
+
+
+class ClinicalAnswerResponse(BaseModel):
+    id: uuid.UUID
+    field: str
+    content: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RedFlagAlertResponse(BaseModel):
+    id: uuid.UUID
+    clinical_session_id: uuid.UUID
+    severity: RedFlagSeverity
+    detected_symptoms: list
+    reason: str
+    recommended_action: str
+    source: RedFlagSource
+    acknowledged: bool
+    acknowledged_by: uuid.UUID | None = None
+    acknowledged_at: datetime | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ClinicalSessionResponse(BaseModel):
+    id: uuid.UUID
+    chief_complaint: str | None
+    language: str
+    collected_fields: dict
+    status: ClinicalSessionStatus
+    created_at: datetime
+    completed_at: datetime | None
+    questions: list[ClinicalQuestionResponse] = []
+    answers: list[ClinicalAnswerResponse] = []
+    red_flags: list[RedFlagAlertResponse] = []
+
+    model_config = {"from_attributes": True}
+
+
+class ClinicalAnswerSubmitResponse(BaseModel):
+    """Response to submitting an answer: the stored answer, the newly
+    detected red flags (if any), and — unless the interview is finished —
+    the next question to ask."""
+
+    answer: ClinicalAnswerResponse
+    next_question: ClinicalQuestionResponse | None
+    should_continue: bool
+    red_flags: list[RedFlagAlertResponse] = []
+
+
+# ── Doctor Portal ──────────────────────────────────────────────────────────
+
+class DoctorPatientBasicInfo(BaseModel):
+    """Minimal patient identity for the doctor's appointment list — not the
+    full clinical picture (that lives behind the patient-summary endpoint)."""
+
+    id: uuid.UUID
+    full_name: str
+    email: str
+    phone: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class DoctorAppointmentItem(BaseModel):
+    """One row in the doctor's appointment list (GET /doctor/appointments).
+
+    Extends the shape the existing frontend already expects (id, scheduled_at,
+    status, notes, call_summary, patient) with the additive triage fields the
+    doctor queue needs. Existing fields are unchanged so current frontend
+    code keeps working; new fields are simply ignored until the UI reads them.
+    """
+
+    id: uuid.UUID
+    scheduled_at: datetime
+    status: AppointmentStatus
+    notes: str | None
+    call_summary: dict | None
+    patient: DoctorPatientBasicInfo
+
+    # Additive triage fields (Doctor Portal)
+    clinical_session_status: str | None = None
+    history_completed: bool = False
+    has_red_flags: bool = False
+    highest_red_flag_severity: str | None = None
+    red_flag_count: int = 0
+    summary_available: bool = False
+
+
+class DoctorPatientSummaryResponse(BaseModel):
+    """GET /doctor/appointments/{id}/patient-summary.
+
+    Matches the shape the existing frontend page already reads
+    (`data.call_summary`, `data.patient_context`) — no new top-level keys
+    that would require reworking PatientSummaryPanel.
+    """
+
+    appointment_id: uuid.UUID
+    call_summary: dict | None
+    patient_context: dict  # PatientContext.model_dump() — reused, not duplicated
+
+
+class RedFlagAcknowledgeRequest(BaseModel):
+    note: str | None = None
+
+
+class DoctorSummaryReviewRequest(BaseModel):
+    """All fields optional — the doctor only sends corrections for the
+    sections that were actually wrong. Anything omitted is left as the
+    AI generated it. Corrections are stored separately (see
+    Appointment.call_summary['doctor_review']) rather than overwriting the
+    original AI output, so provenance is never lost."""
+
+    chief_complaints: str | None = None
+    symptoms: list[str] | None = None
+    medical_history: str | None = None
+    medications: list[str] | None = None
+    allergies: str | None = None
+    reports: str | None = None
+    important_findings: str | None = None
+    doctor_notes: str | None = None

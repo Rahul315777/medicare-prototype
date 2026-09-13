@@ -48,6 +48,24 @@ class FamilyRelation(str, enum.Enum):
     OTHER = "other"
 
 
+class ClinicalSessionStatus(str, enum.Enum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+
+
+class RedFlagSeverity(str, enum.Enum):
+    LOW = "low"
+    MODERATE = "moderate"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class RedFlagSource(str, enum.Enum):
+    RULE = "rule"
+    LLM = "llm"
+    COMBINED = "combined"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -74,6 +92,10 @@ class User(Base):
     reminders: Mapped[list["MedicineReminder"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     emergency_contacts: Mapped[list["EmergencyContact"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    clinical_sessions: Mapped[list["ClinicalSession"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    red_flag_alerts: Mapped[list["RedFlagAlert"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", foreign_keys="RedFlagAlert.user_id"
+    )
 
 
 class FamilyProfile(Base):
@@ -246,3 +268,103 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     user: Mapped["User | None"] = relationship(back_populates="audit_logs")
+
+
+# ==========================================================
+# CLINICAL CASE-TAKING (Phase 1/2 — AI pre-consultation)
+# ==========================================================
+
+class ClinicalSession(Base):
+    """One AI-driven pre-consultation interview for a single patient visit.
+
+    Deliberately separate from ChatSession (the general RAG chatbot) — this
+    is a structured, field-by-field clinical history, not a free-form chat.
+    """
+
+    __tablename__ = "clinical_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    language: Mapped[str] = mapped_column(String(10), default="en")
+    chief_complaint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Structured fields collected so far, e.g. {"onset": "2 days ago", "severity": "7/10"}.
+    # Missing fields are simply absent from this dict rather than guessed.
+    collected_fields: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[ClinicalSessionStatus] = mapped_column(
+        Enum(ClinicalSessionStatus), default=ClinicalSessionStatus.ACTIVE
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="clinical_sessions")
+    questions: Mapped[list["ClinicalQuestion"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan", order_by="ClinicalQuestion.order_index"
+    )
+    answers: Mapped[list["ClinicalAnswer"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan", order_by="ClinicalAnswer.created_at"
+    )
+    red_flags: Mapped[list["RedFlagAlert"]] = relationship(
+        back_populates="clinical_session", cascade="all, delete-orphan"
+    )
+
+
+class ClinicalQuestion(Base):
+    __tablename__ = "clinical_questions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clinical_sessions.id"), nullable=False)
+    field: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g. "onset", "severity"
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    question_type: Mapped[str] = mapped_column(String(20), default="text")  # text | choice | scale
+    options: Mapped[list | None] = mapped_column(JSON, default=list)
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    session: Mapped["ClinicalSession"] = relationship(back_populates="questions")
+    answer: Mapped["ClinicalAnswer | None"] = relationship(back_populates="question", uselist=False)
+
+
+class ClinicalAnswer(Base):
+    __tablename__ = "clinical_answers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clinical_sessions.id"), nullable=False)
+    question_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("clinical_questions.id"), nullable=True
+    )
+    field: Mapped[str] = mapped_column(String(50), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    session: Mapped["ClinicalSession"] = relationship(back_populates="answers")
+    question: Mapped["ClinicalQuestion | None"] = relationship(back_populates="answer")
+
+
+class RedFlagAlert(Base):
+    """A potential-emergency signal raised during clinical case-taking.
+
+    This is a triage/decision-support flag, never a diagnosis — see
+    app.ai.clinical for the detection logic and its safety constraints.
+    """
+
+    __tablename__ = "red_flag_alerts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    clinical_session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("clinical_sessions.id"), nullable=False
+    )
+    severity: Mapped[RedFlagSeverity] = mapped_column(Enum(RedFlagSeverity), default=RedFlagSeverity.MODERATE)
+    detected_symptoms: Mapped[list] = mapped_column(JSON, default=list)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    recommended_action: Mapped[str] = mapped_column(String(100), default="urgent_medical_attention")
+    source: Mapped[RedFlagSource] = mapped_column(Enum(RedFlagSource), default=RedFlagSource.RULE)
+    acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    acknowledged_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="red_flag_alerts", foreign_keys=[user_id])
+    clinical_session: Mapped["ClinicalSession"] = relationship(back_populates="red_flags")
