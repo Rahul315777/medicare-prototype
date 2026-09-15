@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { Heart, Loader2, Eye, EyeOff } from "lucide-react";
+import { Heart, Loader2, Eye, EyeOff, User as UserIcon, Stethoscope } from "lucide-react";
 import { toast } from "sonner"; 
 
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,17 @@ import { Label } from "@/components/ui/input"; // Assuming you have Label export
 
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
+
+// Where each backend role lands after a successful login. Keep in sync with
+// the route protection guard in `(dashboard)/layout.tsx`.
+function getRedirectForRole(role: string | undefined): string {
+  if (role === "doctor") return "/doctor/appointments";
+  // No dedicated admin frontend route exists yet, so admins land on the
+  // shared dashboard for now (backend /admin/* API is already role-gated).
+  return "/dashboard";
+}
+
+type LoginRole = "patient" | "doctor";
 
 // Staggered animation variants
 const containerVariants = {
@@ -36,16 +47,17 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  
-  const { setAuth, isAuthenticated } = useAuthStore();
+  const [loginRole, setLoginRole] = useState<LoginRole>("patient");
+
+  const { setAuth, isAuthenticated, user } = useAuthStore();
   const router = useRouter();
 
   // Redirect if already logged in
   useEffect(() => {
     if (isAuthenticated) {
-      router.replace("/dashboard");
+      router.replace(getRedirectForRole(user?.role));
     }
-  }, [isAuthenticated, router]);
+  }, [isAuthenticated, user, router]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,10 +77,20 @@ export default function LoginPage() {
       
       // Step 4: Update Global Store
       setAuth(me.data, data.access_token, data.refresh_token);
-      
-      // Success Toast
-      toast.success("Welcome back to MediCare AI!");
-      router.push("/dashboard");
+
+      // The account's actual role (from the backend, not the tab the user
+      // clicked) always decides where they land — a patient can't send
+      // themselves to the doctor portal by picking the wrong tab.
+      const actualRole: string = me.data.role;
+      if (
+        (loginRole === "doctor" && actualRole !== "doctor") ||
+        (loginRole === "patient" && actualRole === "doctor")
+      ) {
+        toast.info(`This account is registered as a ${actualRole === "user" ? "patient" : actualRole}. Redirecting you there.`);
+      } else {
+        toast.success("Welcome back to MediCare AI!");
+      }
+      router.push(getRedirectForRole(actualRole));
 
     } catch (err: any) {
       // Better Backend Error Handling
@@ -105,6 +127,35 @@ export default function LoginPage() {
               <CardDescription>Enter your credentials to continue</CardDescription>
             </CardHeader>
             <CardContent>
+              {/* Role selection — cosmetic guidance only; the account's real
+                  role (returned by the backend) always decides the redirect. */}
+              <div className="mb-5 grid grid-cols-2 gap-2 rounded-xl bg-slate-100 dark:bg-slate-800 p-1">
+                <button
+                  type="button"
+                  onClick={() => setLoginRole("patient")}
+                  disabled={loading}
+                  className={`flex items-center justify-center gap-2 rounded-lg py-2 text-sm font-semibold transition-all ${
+                    loginRole === "patient"
+                      ? "bg-white dark:bg-slate-950 text-teal-600 dark:text-teal-400 shadow"
+                      : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                  }`}
+                >
+                  <UserIcon className="h-4 w-4" /> Patient
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLoginRole("doctor")}
+                  disabled={loading}
+                  className={`flex items-center justify-center gap-2 rounded-lg py-2 text-sm font-semibold transition-all ${
+                    loginRole === "doctor"
+                      ? "bg-white dark:bg-slate-950 text-teal-600 dark:text-teal-400 shadow"
+                      : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                  }`}
+                >
+                  <Stethoscope className="h-4 w-4" /> Doctor
+                </button>
+              </div>
+
               <form onSubmit={handleLogin} className="space-y-4">
                 
                 {/* Error Banner */}

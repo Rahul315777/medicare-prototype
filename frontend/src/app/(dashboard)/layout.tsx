@@ -1,20 +1,46 @@
 "use client";
 
 import { useAuthStore } from "@/store/auth";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useEffect } from "react";
 import Link from "next/link";
 import { LayoutDashboard, MessageSquare, FileText, Calendar, LogOut, Stethoscope } from "lucide-react";
 
+// Route-level role protection. This is enforced here (not just by hiding
+// sidebar links) because every route in this group shares this one layout.
+// The backend independently re-checks role on every API call (get_current_doctor
+// / get_admin_user in deps.py) — this guard only stops an unauthorized page
+// from rendering in the first place.
+const DOCTOR_ONLY_PREFIXES = ["/doctor"];
+const ADMIN_ONLY_PREFIXES = ["/admin"];
+
+function isRouteAllowed(pathname: string, role: string | undefined): boolean {
+  if (DOCTOR_ONLY_PREFIXES.some((p) => pathname.startsWith(p))) {
+    return role === "doctor" || role === "admin";
+  }
+  if (ADMIN_ONLY_PREFIXES.some((p) => pathname.startsWith(p))) {
+    return role === "admin";
+  }
+  return true; // shared routes (dashboard, chat, reports, appointments, ...)
+}
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { token, user, logout } = useAuthStore();
+  const { token, user, _hasHydrated, logout } = useAuthStore();
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
-    if (!token) router.push("/login");
-  }, [token, router]);
+    if (!_hasHydrated) return; // wait for persisted auth state to load
+    if (!token) {
+      router.push("/login");
+      return;
+    }
+    if (!isRouteAllowed(pathname, user?.role)) {
+      router.replace("/dashboard");
+    }
+  }, [token, user, pathname, _hasHydrated, router]);
 
-  if (!token) return null;
+  if (!token || !isRouteAllowed(pathname, user?.role)) return null;
 
   return (
     <div className="flex min-h-screen bg-slate-50 dark:bg-slate-950">
